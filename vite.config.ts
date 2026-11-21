@@ -2,9 +2,12 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
+  const projectDir = path.dirname(fileURLToPath(import.meta.url));
+
   return {
     base: '/dimsum-me/',
     plugins: [
@@ -19,8 +22,8 @@ export default defineConfig(() => {
           if (error) {
             return;
           }
-          const distDir = path.resolve(import.meta.dirname, 'dist');
-          const srcAssets = path.resolve(import.meta.dirname, 'src/assets');
+          const distDir = path.resolve(projectDir, 'dist');
+          const srcAssets = path.resolve(projectDir, 'src/assets');
           const distAssets = path.resolve(distDir, 'src/assets');
           if (fs.existsSync(distDir) && fs.existsSync(srcAssets)) {
             fs.cpSync(srcAssets, distAssets, { recursive: true, force: true });
@@ -30,7 +33,7 @@ export default defineConfig(() => {
     ],
     resolve: {
       alias: {
-        '@': path.resolve(import.meta.dirname, '.'),
+        '@': path.resolve(projectDir, '.'),
       },
     },
     server: {
