@@ -11,20 +11,20 @@ import {
 } from '../types';
 
 export const ASSETS = {
-  logo: '/src/assets/images/dimsum_logo_steamer_1795217631219.jpg',
-  sidebarFooter: '/src/assets/images/dimsum_sidebar_footer_1795217633455.jpg',
-  dimsumAyam: '/src/assets/images/dimsum_ayam_thumb_1795217632558.jpg',
-  dimsumUdang: '/src/assets/images/dimsum_udang_thumb_1795217632376.jpg',
-  dimsumMix: '/src/assets/images/dimsum_mix_thumb_1795217632736.jpg',
-  dimsumSausTartar: '/src/assets/images/dimsum_saus_tartar_1795219231922.jpg',
-  dimsumMentaiKeju: '/src/assets/images/dimsum_mentai_keju_1795219003289.jpg',
-  dimsumSausMentai: '/src/assets/images/dimsum_saus_mentai_1795219004444.jpg',
-  dimsumMieMentai: '/src/assets/images/dimsum_mie_mentai_1795219004341.jpg',
-  dimsumGorengMentai: '/src/assets/images/dimsum_goreng_mentai_1795219004422.jpg',
-  dimsumGorengKeju: '/src/assets/images/dimsum_goreng_keju_1795219003095.jpg',
-  chiliOil: '/src/assets/images/chili_oil_pouch_1795219002696.jpg',
-  sausDimsum: '/src/assets/images/saus_dimsum_cup_1795219003556.jpg',
-  airMineral: '/src/assets/images/air_mineral_botol_1795219003475.jpg',
+  logo: new URL('../assets/images/dimsum_logo_steamer_1795217631219.jpg', import.meta.url).href,
+  sidebarFooter: new URL('../assets/images/dimsum_sidebar_footer_1795217633455.jpg', import.meta.url).href,
+  dimsumAyam: new URL('../assets/images/dimsum_ayam_thumb_1795217632558.jpg', import.meta.url).href,
+  dimsumUdang: new URL('../assets/images/dimsum_udang_thumb_1795217632376.jpg', import.meta.url).href,
+  dimsumMix: new URL('../assets/images/dimsum_mix_thumb_1795217632736.jpg', import.meta.url).href,
+  dimsumSausTartar: new URL('../assets/images/dimsum_saus_tartar_1795219231922.jpg', import.meta.url).href,
+  dimsumMentaiKeju: new URL('../assets/images/dimsum_mentai_keju_1795219003289.jpg', import.meta.url).href,
+  dimsumSausMentai: new URL('../assets/images/dimsum_saus_mentai_1795219004444.jpg', import.meta.url).href,
+  dimsumMieMentai: new URL('../assets/images/dimsum_mie_mentai_1795219004341.jpg', import.meta.url).href,
+  dimsumGorengMentai: new URL('../assets/images/dimsum_goreng_mentai_1795219004422.jpg', import.meta.url).href,
+  dimsumGorengKeju: new URL('../assets/images/dimsum_goreng_keju_1795219003095.jpg', import.meta.url).href,
+  chiliOil: new URL('../assets/images/chili_oil_pouch_1795219002696.jpg', import.meta.url).href,
+  sausDimsum: new URL('../assets/images/saus_dimsum_cup_1795219003556.jpg', import.meta.url).href,
+  airMineral: new URL('../assets/images/air_mineral_botol_1795219003475.jpg', import.meta.url).href,
 };
 
 export const INITIAL_USERS: UserAccount[] = [
