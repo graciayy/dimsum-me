@@ -8,7 +8,7 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js';
-import { formatCompactRupiah, formatRupiah } from '../../utils/formatters';
+import { formatCompactRupiah, formatDateID, formatRupiah } from '../../utils/formatters';
 
 Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend);
 
@@ -17,7 +17,7 @@ interface SalesBarChartProps {
     date: string;
     label: string;
     actual: number;
-    comparison: number;
+    comparison: number | null;
     qris: number;
     tunai: number;
   }>;
@@ -39,7 +39,11 @@ export function SalesBarChart({ data, mode = 'stacked' }: SalesBarChartProps) {
     const labels = data.map((d) => d.label);
     const primaryValues = data.map((d) => d.qris);
     const secondaryValues = data.map((d) =>
-      mode === 'stacked' ? d.tunai : Math.max(0, d.comparison - d.actual)
+      mode === 'stacked'
+        ? d.tunai
+        : d.comparison === null
+          ? 0
+          : Math.max(0, d.comparison - d.actual)
     );
 
     chartRef.current = new Chart(canvas, {
@@ -60,6 +64,7 @@ export function SalesBarChart({ data, mode = 'stacked' }: SalesBarChartProps) {
           {
             label: mode === 'stacked' ? 'Pembayaran Tunai' : 'Target Harian',
             data: secondaryValues,
+            hidden: mode === 'grouped' && data.every((row) => row.comparison === null),
             backgroundColor: '#F9E1D6',
             hoverBackgroundColor: '#F5C4B0',
             borderRadius: { topLeft: 5, topRight: 5, bottomLeft: 0, bottomRight: 0 },
@@ -90,12 +95,19 @@ export function SalesBarChart({ data, mode = 'stacked' }: SalesBarChartProps) {
             callbacks: {
               title: (items) => {
                 const idx = items[0]?.dataIndex ?? 0;
-                return `Tanggal ${data[idx]?.label ?? ''} 2026`;
+                return `Tanggal ${formatDateID(data[idx]?.date ?? '')}`;
               },
               label: (ctx) => {
                 const idx = ctx.dataIndex;
                 const row = data[idx];
                 if (!row) return '';
+                if (mode === 'grouped') {
+                  if (ctx.datasetIndex === 0) {
+                    return ` Penjualan Aktual: ${formatRupiah(row.actual)}`;
+                  }
+                  if (row.comparison === null) return '';
+                  return ` Sisa menuju target: ${formatRupiah(Math.max(0, row.comparison - row.actual))}`;
+                }
                 if (ctx.datasetIndex === 0) {
                   return ` QRIS: ${formatRupiah(row.qris)}`;
                 }

@@ -512,18 +512,22 @@ export function Layout({ children }: { children: React.ReactNode }) {
                         </button>
                       </>
                     )}
-                    <div className="my-1 border-t border-[#F0E7E2]" />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setProfileOpen(false);
-                        logout();
-                      }}
-                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[#DC3C2B] hover:bg-red-50"
-                    >
-                      <LogOut className="h-3.5 w-3.5" />
-                      Keluar (Logout)
-                    </button>
+                    {isSupabaseMode && (
+                      <>
+                        <div className="my-1 border-t border-[#F0E7E2]" />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProfileOpen(false);
+                            logout();
+                          }}
+                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-[#DC3C2B] hover:bg-red-50"
+                        >
+                          <LogOut className="h-3.5 w-3.5" />
+                          Keluar (Logout)
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               )}

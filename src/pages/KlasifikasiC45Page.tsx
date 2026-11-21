@@ -58,6 +58,7 @@ function TreeNodeView({ node, edgeLabel }: { node: C45TreeNode; edgeLabel?: stri
 
 export function KlasifikasiC45Page() {
   const {
+    isSupabaseMode,
     c45TrainData,
     c45TestData,
     c45Tree,
@@ -83,6 +84,11 @@ export function KlasifikasiC45Page() {
   } | null>(null);
 
   const rootEntropy = computeEntropy(c45TrainData);
+  const isSimulatedDataset =
+    c45TrainData.length + c45TestData.length > 0 &&
+    [...c45TrainData, ...c45TestData].every(
+      (record) => record.id.startsWith('SIM-') || record.id.startsWith('TST-')
+    );
 
   const handleRunTraining = () => {
     retrainC45(splitRatio);
@@ -116,7 +122,8 @@ export function KlasifikasiC45Page() {
           <button
             type="button"
             onClick={handleRunTraining}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[#E85D3F] px-3.5 py-2 text-xs font-bold text-white hover:bg-[#C93D22]"
+            disabled={c45TrainData.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[#E85D3F] px-3.5 py-2 text-xs font-bold text-white hover:bg-[#C93D22] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Play className="h-3.5 w-3.5" />
             Jalankan Training
@@ -124,7 +131,8 @@ export function KlasifikasiC45Page() {
           <button
             type="button"
             onClick={handleRunPrediction}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[#F0E7E2] bg-white px-3.5 py-2 text-xs font-semibold text-[#151923] hover:bg-[#FAF2EE]"
+            disabled={c45TrainData.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-[#F0E7E2] bg-white px-3.5 py-2 text-xs font-semibold text-[#151923] hover:bg-[#FAF2EE] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Sparkles className="h-3.5 w-3.5 text-[#E85D3F]" />
             Jalankan Prediksi
@@ -166,6 +174,19 @@ export function KlasifikasiC45Page() {
         </div>
       )}
 
+      {isSimulatedDataset && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Dataset SIM/TST adalah data simulasi untuk demonstrasi, bukan transaksi aktual. Gunakan
+          data mitra yang telah divalidasi sebelum menarik kesimpulan kinerja model.
+        </div>
+      )}
+      {isSupabaseMode && c45TrainData.length === 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Dataset C4.5 belum tersedia di Supabase. Training dan prediksi dinonaktifkan sampai data
+          tersedia.
+        </div>
+      )}
+
       {/* Dataset Summary Strip */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <div className="rounded-2xl border border-[#F0E7E2] bg-white p-4">
@@ -180,6 +201,7 @@ export function KlasifikasiC45Page() {
             <select
               id="c45-split"
               value={splitRatio}
+              disabled={c45TrainData.length === 0}
               onChange={(e) => {
                 const val = Number(e.target.value);
                 setSplitRatio(val);
@@ -385,7 +407,8 @@ export function KlasifikasiC45Page() {
           <button
             type="button"
             onClick={handleRunPrediction}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[#E85D3F] px-4 py-2 text-xs font-bold text-white hover:bg-[#C93D22]"
+            disabled={c45TrainData.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[#E85D3F] px-4 py-2 text-xs font-bold text-white hover:bg-[#C93D22] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Sparkles className="h-3.5 w-3.5" />
             Prediksi Sekarang

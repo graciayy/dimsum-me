@@ -30,6 +30,7 @@ import { formatDateID, formatRupiah, formatShortDateID } from '../utils/formatte
 
 export function DashboardPage() {
   const {
+    isSupabaseMode,
     currentUser,
     setCurrentPage,
     transactions,
@@ -53,20 +54,24 @@ export function DashboardPage() {
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
 
-  const availableDates = useMemo(
-    () => ['2026-09-23', ...DAILY_SALES_HISTORY.map((d) => d.date).reverse()],
-    []
-  );
+  const availableDates = useMemo(() => {
+    if (!isSupabaseMode) {
+      return ['2026-09-23', ...DAILY_SALES_HISTORY.map((d) => d.date).reverse()];
+    }
+    return [...new Set([selectedDashboardDate, ...transactions.map((t) => t.date)])]
+      .sort((a, b) => b.localeCompare(a));
+  }, [isSupabaseMode, selectedDashboardDate, transactions]);
 
   const visibleTransactions = useMemo(() => {
     return transactions.filter((t) => {
       if (currentUser?.role === 'kasir' && t.cashierId !== currentUser.id) return false;
+      if (isSupabaseMode && t.date !== selectedDashboardDate) return false;
       if (dashboardPaymentFilter !== 'Semua' && t.paymentMethod !== dashboardPaymentFilter) {
         return false;
       }
       return true;
     });
-  }, [transactions, currentUser, dashboardPaymentFilter]);
+  }, [transactions, currentUser, dashboardPaymentFilter, isSupabaseMode, selectedDashboardDate]);
 
   const txPageCount = Math.max(1, Math.ceil(visibleTransactions.length / 3));
   const pagedTransactions = visibleTransactions.slice(txPage * 3, txPage * 3 + 3);

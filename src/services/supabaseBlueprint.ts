@@ -319,6 +319,7 @@ export const SUPABASE_SEED_SQL = `-- ===========================================
 -- 2. SEED KATALOG RESMI 25 PRODUK DIMSUM ME, KRITERIA SAW, & DATASET C4.5
 -- Semua harga sudah dikoreksi (termasuk Dimsum Mie Saus Mentai isi 2 = Rp38.000
 -- dan Dimsum Goreng Mentai (3 pcs) = Rp48.000).
+-- Perhatian: bila dijalankan ulang, produk dan bobot kriteria SAW disetel ulang ke nilai seed.
 -- ============================================================================
 
 insert into public.products (id, product_name, category, price, description, image_url, variant_options, max_variant_select, is_active)

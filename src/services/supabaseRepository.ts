@@ -178,6 +178,17 @@ export function mapUserToRow(user: UserAccount): DbProfileRow {
   };
 }
 
+export function normalizeSupabaseAssetUrl(
+  imageUrl: string | null,
+  baseUrl = import.meta.env?.BASE_URL ?? '/'
+): string {
+  if (!imageUrl) return '';
+  if (/^(https?:|data:|blob:)/i.test(imageUrl) || !imageUrl.startsWith('/src/assets/')) {
+    return imageUrl;
+  }
+  return `${baseUrl.replace(/\/?$/, '/')}${imageUrl.slice(1)}`;
+}
+
 export function mapRowToProduct(row: DbProductRow): Product {
   const variants = Array.isArray(row.variant_options) ? row.variant_options : [];
   return {
@@ -186,7 +197,7 @@ export function mapRowToProduct(row: DbProductRow): Product {
     category: row.category as ProductCategory,
     price: Number(row.price),
     description: row.description ?? '',
-    image: row.image_url ?? '',
+    image: normalizeSupabaseAssetUrl(row.image_url),
     active: Boolean(row.is_active),
     ...(variants.length > 0 ? { variantOptions: variants } : {}),
     ...(row.max_variant_select && row.max_variant_select > 0
@@ -226,7 +237,7 @@ export function mapRowsToTransactions(
       productName: itemRow.product_name_snapshot,
       qty: Number(itemRow.qty),
       unitPrice: Number(itemRow.unit_price_snapshot),
-      image: itemRow.image_url ?? '',
+      image: normalizeSupabaseAssetUrl(itemRow.image_url),
       ...(variants.length > 0 ? { selectedVariants: variants } : {}),
     });
     itemsByTx.set(itemRow.transaction_id, list);
@@ -410,183 +421,183 @@ export async function fetchAuthenticatedUserProfile(): Promise<{
   user: UserAccount | null;
   error?: string;
 }> {
-  const client = getSupabaseClient();
-  if (!client) return { user: null };
+  try {
+    const client = getSupabaseClient();
+    if (!client) return { user: null, error: 'Konfigurasi Supabase belum tersedia.' };
 
-  const {
-    data: { session },
-    error: sessionError,
-  } = await client.auth.getSession();
+    const {
+      data: { session },
+      error: sessionError,
+    } = await client.auth.getSession();
 
-  if (sessionError || !session?.user) {
-    return { user: null };
-  }
+    if (sessionError) return { user: null, error: sessionError.message };
+    if (!session?.user) return { user: null };
 
-  const { data: profile, error: profileError } = await client
-    .from('profiles')
-    .select('*')
-    .eq('id', session.user.id)
-    .maybeSingle();
+    const { data: profile, error: profileError } = await client
+      .from('profiles')
+      .select('*')
+      .eq('id', session.user.id)
+      .maybeSingle();
 
-  if (profileError || !profile) {
+    if (profileError) {
+      return { user: null, error: `Gagal membaca profil Supabase: ${profileError.message}` };
+    }
+    if (!profile) {
+      return {
+        user: null,
+        error: 'Profil pengguna belum tersedia di tabel public.profiles.',
+      };
+    }
+
+    const mapped = mapRowToUser(profile as DbProfileRow);
+    if (!mapped.active) {
+      await client.auth.signOut();
+      return { user: null, error: 'Akun Anda sedang dinonaktifkan oleh Admin.' };
+    }
+
+    return { user: mapped };
+  } catch (err) {
     return {
       user: null,
-      error: 'Profil pengguna belum tersedia di tabel public.profiles.',
+      error: err instanceof Error ? err.message : 'Gagal memeriksa sesi Supabase.',
     };
   }
-
-  const mapped = mapRowToUser(profile as DbProfileRow);
-  if (!mapped.active) {
-    await client.auth.signOut();
-    return { user: null, error: 'Akun Anda sedang dinonaktifkan oleh Admin.' };
-  }
-
-  return { user: mapped };
 }
 
 export async function signInWithSupabasePassword(
   email: string,
   password: string
 ): Promise<{ ok: boolean; user?: UserAccount; error?: string }> {
-  const client = getSupabaseClient();
-  if (!client) {
-    return { ok: false, error: 'Konfigurasi Supabase belum tersedia.' };
-  }
+  try {
+    const client = getSupabaseClient();
+    if (!client) {
+      return { ok: false, error: 'Konfigurasi Supabase belum tersedia.' };
+    }
 
-  const { data, error } = await client.auth.signInWithPassword({
-    email: email.trim(),
-    password,
-  });
+    const { data, error } = await client.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
 
-  if (error || !data.user) {
+    if (error || !data.user) {
+      return {
+        ok: false,
+        error:
+          error?.message === 'Invalid login credentials'
+            ? 'Email atau kata sandi Supabase Auth tidak valid.'
+            : error?.message || 'Gagal masuk menggunakan Supabase Authentication.',
+      };
+    }
+
+    const { data: profile, error: profileError } = await client
+      .from('profiles')
+      .select('*')
+      .eq('id', data.user.id)
+      .maybeSingle();
+
+    if (profileError || !profile) {
+      await client.auth.signOut();
+      return {
+        ok: false,
+        error: profileError
+          ? `Gagal membaca profil Supabase: ${profileError.message}`
+          : 'Akun Auth ditemukan, tetapi profil pada public.profiles belum dibuat.',
+      };
+    }
+
+    const mapped = mapRowToUser(profile as DbProfileRow);
+    if (!mapped.active) {
+      await client.auth.signOut();
+      return { ok: false, error: 'Akun Anda saat ini berstatus nonaktif.' };
+    }
+
+    return { ok: true, user: mapped };
+  } catch (err) {
     return {
       ok: false,
-      error:
-        error?.message === 'Invalid login credentials'
-          ? 'Email atau kata sandi Supabase Auth tidak valid.'
-          : error?.message || 'Gagal masuk menggunakan Supabase Authentication.',
+      error: err instanceof Error ? err.message : 'Gagal masuk menggunakan Supabase Authentication.',
     };
   }
-
-  const { data: profile, error: profileError } = await client
-    .from('profiles')
-    .select('*')
-    .eq('id', data.user.id)
-    .maybeSingle();
-
-  if (profileError || !profile) {
-    await client.auth.signOut();
-    return {
-      ok: false,
-      error: 'Akun Auth ditemukan, tetapi profil pada public.profiles belum dibuat.',
-    };
-  }
-
-  const mapped = mapRowToUser(profile as DbProfileRow);
-  if (!mapped.active) {
-    await client.auth.signOut();
-    return { ok: false, error: 'Akun Anda saat ini berstatus nonaktif.' };
-  }
-
-  return { ok: true, user: mapped };
 }
 
 export async function signOutFromSupabase(): Promise<void> {
   const client = getSupabaseClient();
-  if (!client) return;
+  if (!client) throw new Error('Konfigurasi Supabase belum tersedia.');
   await client.auth.signOut();
 }
 
 export async function fetchOperationalStateFromSupabase(
   currentUser: UserAccount
-): Promise<SupabaseLoadedState | null> {
+): Promise<SupabaseLoadedState> {
   const client = getSupabaseClient();
-  if (!client) return null;
+  if (!client) throw new Error('Konfigurasi Supabase belum tersedia.');
 
-  try {
-    const isAdmin = currentUser.role === 'admin';
+  const isAdmin = currentUser.role === 'admin';
 
-    const [profilesRes, productsRes, txRes, itemsRes, recRes, sawRes, repRes] = await Promise.all([
-      client.from('profiles').select('*').order('role', { ascending: true }),
-      client.from('products').select('*').order('id', { ascending: true }),
+  const [profilesRes, productsRes, txRes, itemsRes, recRes, sawRes, repRes] = await Promise.all([
+    client.from('profiles').select('*').order('role', { ascending: true }),
+    client.from('products').select('*').order('id', { ascending: true }),
+    client
+      .from('transactions')
+      .select('*')
+      .order('trx_date', { ascending: false })
+      .order('trx_time', { ascending: false }),
+    client.from('transaction_items').select('*'),
+    client.from('reconciliations').select('*').order('rec_date', { ascending: false }),
+    client.from('saw_criteria').select('*').order('code', { ascending: true }),
+    client.from('reports').select('*').order('report_date', { ascending: false }),
+  ]);
+
+  const requiredResults = [
+    ['profiles', profilesRes],
+    ['products', productsRes],
+    ['transactions', txRes],
+    ['transaction_items', itemsRes],
+    ['reconciliations', recRes],
+    ['saw_criteria', sawRes],
+    ['reports', repRes],
+  ] as const;
+  const failedQuery = requiredResults.find(([, result]) => result.error);
+  if (failedQuery?.[1].error) {
+    throw new Error(`Gagal membaca tabel ${failedQuery[0]}: ${failedQuery[1].error.message}`);
+  }
+
+  let qrisMutations: QrisMerchantMutation[] = [];
+  let c45Dataset: C45Record[] = [];
+
+  if (isAdmin) {
+    const [mutRes, c45Res] = await Promise.all([
       client
-        .from('transactions')
+        .from('qris_mutations')
         .select('*')
-        .order('trx_date', { ascending: false })
-        .order('trx_time', { ascending: false }),
-      client.from('transaction_items').select('*'),
-      client.from('reconciliations').select('*').order('rec_date', { ascending: false }),
-      client.from('saw_criteria').select('*').order('code', { ascending: true }),
-      client.from('reports').select('*').order('report_date', { ascending: false }),
+        .order('mut_date', { ascending: false })
+        .order('mut_time', { ascending: false }),
+      client.from('c45_dataset_records').select('*').order('id', { ascending: true }),
     ]);
+    if (mutRes.error) throw new Error(`Gagal membaca tabel qris_mutations: ${mutRes.error.message}`);
+    if (c45Res.error) throw new Error(`Gagal membaca tabel c45_dataset_records: ${c45Res.error.message}`);
+    qrisMutations = (mutRes.data as DbQrisMutationRow[]).map(mapRowToQrisMutation);
+    c45Dataset = (c45Res.data as DbC45DatasetRow[]).map(mapRowToC45Record);
+  }
 
-    if (productsRes.error || txRes.error || itemsRes.error || sawRes.error) {
-      console.warn(
-        'Gagal memuat sebagian tabel Supabase:',
-        productsRes.error?.message || txRes.error?.message || sawRes.error?.message
-      );
-      return null;
-    }
-
-    let qrisMutations: QrisMerchantMutation[] = [];
-    let c45Dataset: C45Record[] | undefined;
-
-    if (isAdmin) {
-      const [mutRes, c45Res] = await Promise.all([
-        client
-          .from('qris_mutations')
-          .select('*')
-          .order('mut_date', { ascending: false })
-          .order('mut_time', { ascending: false }),
-        client.from('c45_dataset_records').select('*').order('id', { ascending: true }),
-      ]);
-      if (!mutRes.error && mutRes.data) {
-        qrisMutations = (mutRes.data as DbQrisMutationRow[]).map(mapRowToQrisMutation);
-      }
-      if (!c45Res.error && c45Res.data && c45Res.data.length > 0) {
-        c45Dataset = (c45Res.data as DbC45DatasetRow[]).map(mapRowToC45Record);
-      }
-    }
-
-    const mappedUsers =
-      !profilesRes.error && profilesRes.data && profilesRes.data.length > 0
-        ? (profilesRes.data as DbProfileRow[]).map(mapRowToUser)
-        : [currentUser];
-
-    const mappedProducts = (productsRes.data as DbProductRow[]).map(mapRowToProduct);
-    const mappedTransactions = mapRowsToTransactions(
+  return {
+    users: (profilesRes.data as DbProfileRow[]).map(mapRowToUser),
+    products: (productsRes.data as DbProductRow[]).map(mapRowToProduct),
+    transactions: mapRowsToTransactions(
       txRes.data as DbTransactionRow[],
       (itemsRes.data ?? []) as DbTransactionItemRow[]
-    );
-    const mappedReconciliations =
-      !recRes.error && recRes.data
-        ? (recRes.data as DbReconciliationRow[]).map(mapRowToReconciliation)
-        : [];
-    const mappedSaw = (sawRes.data as DbSawCriterionRow[]).map(mapRowToSawCriterion);
-    const mappedReports =
-      !repRes.error && repRes.data
-        ? (repRes.data as DbReportRow[]).map(mapRowToReport)
-        : [];
-
-    return {
-      users: mappedUsers,
-      products: mappedProducts,
-      transactions: mappedTransactions,
-      qrisMutations,
-      reconciliations: mappedReconciliations,
-      sawCriteria: mappedSaw,
-      reports: mappedReports,
-      c45Dataset,
-    };
-  } catch (err) {
-    console.error('Gagal membaca state operasional dari Supabase:', err);
-    return null;
-  }
+    ),
+    qrisMutations,
+    reconciliations: (recRes.data as DbReconciliationRow[]).map(mapRowToReconciliation),
+    sawCriteria: (sawRes.data as DbSawCriterionRow[]).map(mapRowToSawCriterion),
+    reports: (repRes.data as DbReportRow[]).map(mapRowToReport),
+    c45Dataset,
+  };
 }
 
 export async function upsertProductInSupabase(product: Product): Promise<{ ok: boolean; error?: string }> {
   const client = getSupabaseClient();
-  if (!client) return { ok: true };
+  if (!client) return { ok: false, error: 'Konfigurasi Supabase belum tersedia.' };
   try {
     const { error } = await client
       .from('products')
@@ -600,7 +611,7 @@ export async function upsertProductInSupabase(product: Product): Promise<{ ok: b
 
 export async function deleteProductInSupabase(productId: string): Promise<{ ok: boolean; error?: string }> {
   const client = getSupabaseClient();
-  if (!client) return { ok: true };
+  if (!client) return { ok: false, error: 'Konfigurasi Supabase belum tersedia.' };
   try {
     const { error } = await client.from('products').delete().eq('id', productId);
     if (error) return { ok: false, error: error.message };
@@ -614,7 +625,7 @@ export async function insertTransactionInSupabase(
   tx: Transaction
 ): Promise<{ ok: boolean; error?: string }> {
   const client = getSupabaseClient();
-  if (!client) return { ok: true };
+  if (!client) return { ok: false, error: 'Konfigurasi Supabase belum tersedia.' };
   try {
     const { error: txErr } = await client
       .from('transactions')
@@ -639,7 +650,7 @@ export async function updateTransactionVerificationInSupabase(
   notes?: string
 ): Promise<{ ok: boolean; error?: string }> {
   const client = getSupabaseClient();
-  if (!client) return { ok: true };
+  if (!client) return { ok: false, error: 'Konfigurasi Supabase belum tersedia.' };
   try {
     const { error } = await client
       .from('transactions')
@@ -660,7 +671,7 @@ export async function upsertQrisMutationInSupabase(
   mut: QrisMerchantMutation
 ): Promise<{ ok: boolean; error?: string }> {
   const client = getSupabaseClient();
-  if (!client) return { ok: true };
+  if (!client) return { ok: false, error: 'Konfigurasi Supabase belum tersedia.' };
   try {
     const { error } = await client
       .from('qris_mutations')
@@ -676,7 +687,7 @@ export async function upsertReconciliationInSupabase(
   rec: ReconciliationRecord
 ): Promise<{ ok: boolean; error?: string }> {
   const client = getSupabaseClient();
-  if (!client) return { ok: true };
+  if (!client) return { ok: false, error: 'Konfigurasi Supabase belum tersedia.' };
   try {
     const { error } = await client
       .from('reconciliations')
@@ -692,7 +703,7 @@ export async function upsertSawCriteriaInSupabase(
   criteria: SawCriterion[]
 ): Promise<{ ok: boolean; error?: string }> {
   const client = getSupabaseClient();
-  if (!client) return { ok: true };
+  if (!client) return { ok: false, error: 'Konfigurasi Supabase belum tersedia.' };
   try {
     const { error } = await client
       .from('saw_criteria')
@@ -710,7 +721,7 @@ export async function saveSawEvaluationInSupabase(params: {
   createdById: string;
 }): Promise<{ ok: boolean; error?: string }> {
   const client = getSupabaseClient();
-  if (!client) return { ok: true };
+  if (!client) return { ok: false, error: 'Konfigurasi Supabase belum tersedia.' };
 
   try {
     const evaluationId = generateUuid();
@@ -757,7 +768,7 @@ export async function saveC45TrainingRunInSupabase(params: {
   trainedById: string;
 }): Promise<{ ok: boolean; trainingRunId?: string; error?: string }> {
   const client = getSupabaseClient();
-  if (!client) return { ok: true };
+  if (!client) return { ok: false, error: 'Konfigurasi Supabase belum tersedia.' };
 
   try {
     const trainingRunId = generateUuid();
@@ -802,7 +813,7 @@ export async function saveC45PredictionInSupabase(params: {
   predictedById: string;
 }): Promise<{ ok: boolean; error?: string }> {
   const client = getSupabaseClient();
-  if (!client) return { ok: true };
+  if (!client) return { ok: false, error: 'Konfigurasi Supabase belum tersedia.' };
 
   try {
     const { error } = await client.from('c45_predictions').insert({
@@ -824,7 +835,7 @@ export async function insertReportInSupabase(
   fallbackUserId: string
 ): Promise<{ ok: boolean; error?: string }> {
   const client = getSupabaseClient();
-  if (!client) return { ok: true };
+  if (!client) return { ok: false, error: 'Konfigurasi Supabase belum tersedia.' };
   try {
     const { error } = await client
       .from('reports')

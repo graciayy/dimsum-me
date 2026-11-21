@@ -9,7 +9,14 @@ import { validateSawWeights } from '../utils/saw';
 Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip);
 
 export function AnalisisSawPage() {
-  const { currentUser, sawCriteria, sawAlternatives, sawResult, updateSawWeights } = useApp();
+  const {
+    isSupabaseMode,
+    currentUser,
+    sawCriteria,
+    sawAlternatives,
+    sawResult,
+    updateSawWeights,
+  } = useApp();
   const [draftCriteria, setDraftCriteria] = useState<SawCriterion[]>(sawCriteria);
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
   const chartCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -80,15 +87,18 @@ export function AnalisisSawPage() {
     setFeedback(null);
   };
 
-  const handleSaveWeights = () => {
-    const res = updateSawWeights(draftCriteria);
+  const handleSaveWeights = async () => {
+    const res = await updateSawWeights(draftCriteria);
     setFeedback({ ok: res.ok, text: res.message });
   };
 
-  const handleResetWeights = () => {
+  const handleResetWeights = async () => {
     setDraftCriteria(INITIAL_SAW_CRITERIA);
-    const res = updateSawWeights(INITIAL_SAW_CRITERIA);
-    setFeedback({ ok: res.ok, text: 'Bobot dikembalikan ke konfigurasi awal (100%).' });
+    const res = await updateSawWeights(INITIAL_SAW_CRITERIA);
+    setFeedback({
+      ok: res.ok,
+      text: res.ok ? 'Bobot dikembalikan ke konfigurasi awal (100%).' : res.message,
+    });
   };
 
   return (
@@ -98,6 +108,13 @@ export function AnalisisSawPage() {
           Analisis Ketepatan Pencatatan (Metode SAW)
         </h1>
       </div>
+
+      {isSupabaseMode && sawAlternatives.length === 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Belum ada sumber alternatif SAW operasional di skema database saat ini. Data alternatif
+          simulasi tidak ditampilkan atau dihitung sebagai data Supabase.
+        </div>
+      )}
 
       {/* Penjelasan & Rumus */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -174,7 +191,7 @@ export function AnalisisSawPage() {
               </button>
               <button
                 type="button"
-                disabled={!weightValidation.isValid}
+                disabled={!weightValidation.isValid || draftCriteria.length === 0}
                 onClick={handleSaveWeights}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-[#E85D3F] px-4 py-2 text-xs font-bold text-white transition-colors hover:bg-[#C93D22] disabled:cursor-not-allowed disabled:opacity-50"
               >
@@ -276,6 +293,16 @@ export function AnalisisSawPage() {
                         {alt.scores[c.id]}
                       </td>
                     ))}
+                    {sawAlternatives.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={sawCriteria.length + 1}
+                          className="px-3 py-5 text-center text-[#6B7280]"
+                        >
+                          Belum tersedia data alternatif.
+                        </td>
+                      </tr>
+                    )}
                   </tr>
                 ))}
               </tbody>

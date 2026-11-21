@@ -35,7 +35,11 @@ import {
 } from '../types';
 import { calculateSaw } from '../utils/saw';
 import { evaluateC45Model, trainC45Tree } from '../utils/c45';
-import { getSupabaseClient, isSupabaseConfigured } from '../services/supabaseClient';
+import {
+  getSupabaseClient,
+  getSupabaseConfigError,
+  isSupabaseConfigured,
+} from '../services/supabaseClient';
 import {
   deleteProductInSupabase,
   fetchAuthenticatedUserProfile,
@@ -54,6 +58,7 @@ import {
   upsertReconciliationInSupabase,
   upsertSawCriteriaInSupabase,
 } from '../services/supabaseRepository';
+import { formatShortDateID } from '../utils/formatters';
 
 interface AppContextValue {
   isSupabaseMode: boolean;
@@ -102,7 +107,9 @@ interface AppContextValue {
   sawCriteria: SawCriterion[];
   sawAlternatives: SawAlternative[];
   sawResult: SawCalculationResult;
-  updateSawWeights: (updatedCriteria: SawCriterion[]) => { ok: boolean; message: string };
+  updateSawWeights: (
+    updatedCriteria: SawCriterion[]
+  ) => Promise<{ ok: boolean; message: string }>;
 
   c45TrainData: C45Record[];
   c45TestData: C45Record[];
@@ -136,7 +143,7 @@ interface AppContextValue {
       date: string;
       label: string;
       actual: number;
-      comparison: number;
+      comparison: number | null;
       qris: number;
       tunai: number;
     }>;
@@ -145,6 +152,12 @@ interface AppContextValue {
 }
 
 const STORAGE_KEY = 'dimsum_me_app_state_v6';
+
+function getLocalDateString(date = new Date()): string {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
 
 const AppContext = createContext<AppContextValue | null>(null);
 
@@ -163,6 +176,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const persisted = useMemo(() => (isSupabaseMode ? null : loadPersistedState()), [isSupabaseMode]);
 
   const [authLoading, setAuthLoading] = useState<boolean>(isSupabaseMode);
+  const [supabaseError, setSupabaseError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState<PageId>('dashboard');
   const [users, setUsers] = useState<UserAccount[]>(isSupabaseMode ? [] : INITIAL_USERS);
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
@@ -174,7 +188,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   });
 
   const [products, setProducts] = useState<Product[]>(
-    () => persisted?.products ?? INITIAL_PRODUCTS
+    () => persisted?.products ?? (isSupabaseMode ? [] : INITIAL_PRODUCTS)
   );
   const [transactions, setTransactions] = useState<Transaction[]>(
     () => persisted?.transactions ?? (isSupabaseMode ? [] : INITIAL_TRANSACTIONS)
@@ -186,20 +200,60 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     () => persisted?.reconciliations ?? (isSupabaseMode ? [] : INITIAL_RECONCILIATIONS)
   );
   const [sawCriteria, setSawCriteria] = useState<SawCriterion[]>(
-    () => persisted?.sawCriteria ?? INITIAL_SAW_CRITERIA
+    () => persisted?.sawCriteria ?? (isSupabaseMode ? [] : INITIAL_SAW_CRITERIA)
   );
-  const [sawAlternatives] = useState<SawAlternative[]>(INITIAL_SAW_ALTERNATIVES);
-  const [c45Dataset, setC45Dataset] = useState<C45Record[]>(C45_DATASET);
+  const [sawAlternatives] = useState<SawAlternative[]>(
+    isSupabaseMode ? [] : INITIAL_SAW_ALTERNATIVES
+  );
+  const [c45Dataset, setC45Dataset] = useState<C45Record[]>(
+    isSupabaseMode ? [] : C45_DATASET
+  );
   const [reports, setReports] = useState<ReportHistoryItem[]>(
     () => persisted?.reports ?? (isSupabaseMode ? [] : INITIAL_REPORTS)
   );
 
-  const [selectedDashboardDate, setSelectedDashboardDate] = useState<string>('2026-09-23');
+  const [selectedDashboardDate, setSelectedDashboardDate] = useState<string>(
+    isSupabaseMode ? getLocalDateString() : '2026-09-23'
+  );
   const [dashboardPaymentFilter, setDashboardPaymentFilter] = useState<'Semua' | PaymentMethod>(
     'Semua'
   );
 
   const [c45SplitIdx, setC45SplitIdx] = useState<number>(28);
+
+  const applyRemoteState = (remote: Awaited<ReturnType<typeof fetchOperationalStateFromSupabase>>) => {
+    setUsers(remote.users);
+    setProducts(remote.products);
+    setTransactions(remote.transactions);
+    setQrisMutations(remote.qrisMutations);
+    setReconciliations(remote.reconciliations);
+    setSawCriteria(remote.sawCriteria);
+    setReports(remote.reports);
+    setC45Dataset(remote.c45Dataset ?? []);
+  };
+
+  const runSupabaseAction = async (
+    action: Promise<{ ok: boolean; error?: string }>,
+    actionLabel: string
+  ) => {
+    try {
+      const result = await action;
+      if (!result.ok) throw new Error(result.error || 'Operasi tidak berhasil.');
+      setSupabaseError(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Kesalahan Supabase tidak diketahui.';
+      let refreshMessage = '';
+      if (currentUser) {
+        try {
+          applyRemoteState(await fetchOperationalStateFromSupabase(currentUser));
+        } catch (refreshError) {
+          refreshMessage =
+            refreshError instanceof Error ? ` Gagal memuat ulang data: ${refreshError.message}` : '';
+        }
+      }
+      setSupabaseError(`${actionLabel}: ${message}${refreshMessage}`);
+    }
+  };
 
   // Persist offline preview state only when Supabase is not configured
   useEffect(() => {
@@ -234,8 +288,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   // Supabase Auth session initialization & listener
   useEffect(() => {
     if (!isSupabaseMode) return;
-    const client = getSupabaseClient();
+    let client: ReturnType<typeof getSupabaseClient>;
+    try {
+      client = getSupabaseClient();
+    } catch (err) {
+      setSupabaseError(
+        err instanceof Error ? err.message : 'Konfigurasi Supabase tidak valid.'
+      );
+      setAuthLoading(false);
+      return;
+    }
     if (!client) {
+      setSupabaseError(getSupabaseConfigError() ?? 'Konfigurasi Supabase belum tersedia.');
       setAuthLoading(false);
       return;
     }
@@ -243,8 +307,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let mounted = true;
 
     const initSession = async () => {
-      const { user } = await fetchAuthenticatedUserProfile();
+      const { user, error } = await fetchAuthenticatedUserProfile();
       if (!mounted) return;
+      if (error) setSupabaseError(error);
       setCurrentUser(user);
       setAuthLoading(false);
     };
@@ -259,8 +324,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setAuthLoading(false);
         return;
       }
-      void fetchAuthenticatedUserProfile().then(({ user }) => {
+      void fetchAuthenticatedUserProfile().then(({ user, error }) => {
         if (!mounted) return;
+        if (error) setSupabaseError(error);
         setCurrentUser(user);
         setAuthLoading(false);
       });
@@ -278,17 +344,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     let active = true;
 
     const loadRemoteState = async () => {
-      const remote = await fetchOperationalStateFromSupabase(currentUser);
-      if (!active || !remote) return;
-      setUsers(remote.users);
-      if (remote.products.length > 0) setProducts(remote.products);
-      setTransactions(remote.transactions);
-      setQrisMutations(remote.qrisMutations);
-      setReconciliations(remote.reconciliations);
-      if (remote.sawCriteria.length > 0) setSawCriteria(remote.sawCriteria);
-      setReports(remote.reports);
-      if (remote.c45Dataset && remote.c45Dataset.length > 0) {
-        setC45Dataset(remote.c45Dataset);
+      try {
+        const remote = await fetchOperationalStateFromSupabase(currentUser);
+        if (!active) return;
+        applyRemoteState(remote);
+        setSupabaseError(null);
+      } catch (err) {
+        if (!active) return;
+        setSupabaseError(
+          err instanceof Error ? err.message : 'Gagal memuat data operasional dari Supabase.'
+        );
       }
     };
 
@@ -361,10 +426,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = async () => {
-    if (isSupabaseMode) {
-      await signOutFromSupabase();
+    if (!isSupabaseMode) {
+      setCurrentUser(INITIAL_USERS[0]);
+      setCurrentPage('dashboard');
+      return;
     }
-    setCurrentUser(null);
+    try {
+      await signOutFromSupabase();
+      setCurrentUser(null);
+      setSupabaseError(null);
+    } catch (err) {
+      setSupabaseError(
+        err instanceof Error
+          ? `Gagal keluar dari Supabase: ${err.message}`
+          : 'Gagal keluar dari Supabase.'
+      );
+    }
   };
 
   const switchRole = (role: UserRole) => {
@@ -389,7 +466,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
     setProducts((prev) => [newProd, ...prev]);
     if (isSupabaseMode) {
-      void upsertProductInSupabase(newProd);
+      void runSupabaseAction(upsertProductInSupabase(newProd), 'Gagal menyimpan produk');
     }
   };
 
@@ -399,7 +476,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const saved: Product = { ...updated, updatedAt: nowIso };
     setProducts((prev) => prev.map((p) => (p.id === saved.id ? saved : p)));
     if (isSupabaseMode) {
-      void upsertProductInSupabase(saved);
+      void runSupabaseAction(upsertProductInSupabase(saved), 'Gagal memperbarui produk');
     }
   };
 
@@ -411,7 +488,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const toggled: Product = { ...target, active: !target.active, updatedAt: nowIso };
     setProducts((prev) => prev.map((p) => (p.id === productId ? toggled : p)));
     if (isSupabaseMode) {
-      void upsertProductInSupabase(toggled);
+      void runSupabaseAction(upsertProductInSupabase(toggled), 'Gagal mengubah status produk');
     }
   };
 
@@ -419,7 +496,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (currentUser?.role !== 'admin') return;
     setProducts((prev) => prev.filter((p) => p.id !== productId));
     if (isSupabaseMode) {
-      void deleteProductInSupabase(productId);
+      void runSupabaseAction(deleteProductInSupabase(productId), 'Gagal menghapus produk');
     }
   };
 
@@ -471,7 +548,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setTransactions((prev) => [newTx, ...prev]);
 
     if (isSupabaseMode) {
-      void insertTransactionInSupabase(newTx);
+      void runSupabaseAction(insertTransactionInSupabase(newTx), 'Gagal menyimpan transaksi');
       if (paymentMethod === 'QRIS' && generatedQrisRef && currentUser?.role === 'admin') {
         const mut: QrisMerchantMutation = {
           id: generateUuid(),
@@ -485,7 +562,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           matchedInvoiceNo: invoiceNo,
         };
         setQrisMutations((prev) => [mut, ...prev]);
-        void upsertQrisMutationInSupabase(mut);
+        void runSupabaseAction(upsertQrisMutationInSupabase(mut), 'Gagal menyimpan mutasi QRIS');
       }
       return newTx;
     }
@@ -564,7 +641,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
 
     if (isSupabaseMode) {
-      void updateTransactionVerificationInSupabase(txId, verificationStatus, newStatus, note);
+      void runSupabaseAction(
+        updateTransactionVerificationInSupabase(txId, verificationStatus, newStatus, note),
+        'Gagal memperbarui verifikasi transaksi'
+      );
     }
 
     if (targetTx && targetTx.paymentMethod === 'QRIS') {
@@ -596,9 +676,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       });
       setReconciliations(nextReconciliationsAfterVerify);
       if (isSupabaseMode) {
-        for (const r of syncedRecs) {
-          void upsertReconciliationInSupabase(r);
-        }
+        void runSupabaseAction(
+          Promise.all(syncedRecs.map((r) => upsertReconciliationInSupabase(r))).then((results) => {
+            const failed = results.find((result) => !result.ok);
+            return failed ?? { ok: true };
+          }),
+          'Gagal menyimpan rekonsiliasi'
+        );
       }
     }
   };
@@ -625,11 +709,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     setReconciliations(nextReconciliations);
     if (isSupabaseMode && savedRec) {
-      void upsertReconciliationInSupabase(savedRec);
+      void runSupabaseAction(
+        upsertReconciliationInSupabase(savedRec),
+        'Gagal menyimpan rekonsiliasi'
+      );
     }
   };
 
-  const updateSawWeights = (updatedCriteria: SawCriterion[]) => {
+  const updateSawWeights = async (updatedCriteria: SawCriterion[]) => {
     if (currentUser?.role !== 'admin') {
       return { ok: false, message: 'Hanya Admin yang berwenang mengubah bobot kriteria SAW.' };
     }
@@ -640,15 +727,36 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         message: `Total bobot saat ini ${total}%. Harus tepat 100% sebelum disimpan.`,
       };
     }
-    setSawCriteria(updatedCriteria);
     if (isSupabaseMode) {
-      const nextResult = calculateSaw(updatedCriteria, sawAlternatives);
-      void upsertSawCriteriaInSupabase(updatedCriteria);
-      void saveSawEvaluationInSupabase({
-        periodLabel: new Date().toISOString().slice(0, 10),
-        sawResult: nextResult,
-        createdById: currentUser.id,
-      });
+      try {
+        const savedCriteria = await upsertSawCriteriaInSupabase(updatedCriteria);
+        if (!savedCriteria.ok) {
+          const message = savedCriteria.error || 'Gagal menyimpan bobot SAW.';
+          setSupabaseError(message);
+          return { ok: false, message };
+        }
+        setSupabaseError(null);
+        setSawCriteria(updatedCriteria);
+        if (sawAlternatives.length > 0) {
+          const nextResult = calculateSaw(updatedCriteria, sawAlternatives);
+          const savedEvaluation = await saveSawEvaluationInSupabase({
+            periodLabel: getLocalDateString(),
+            sawResult: nextResult,
+            createdById: currentUser.id,
+          });
+          if (!savedEvaluation.ok) {
+            const message = `Bobot tersimpan, tetapi evaluasi SAW gagal disimpan: ${savedEvaluation.error || 'kesalahan tidak diketahui.'}`;
+            setSupabaseError(message);
+            return { ok: false, message };
+          }
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Gagal menyimpan bobot SAW.';
+        setSupabaseError(message);
+        return { ok: false, message };
+      }
+    } else {
+      setSawCriteria(updatedCriteria);
     }
     return { ok: true, message: 'Bobot kriteria SAW berhasil diperbarui (100%).' };
   };
@@ -663,15 +771,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const nextTest = c45Dataset.slice(count);
       const { tree, rootMetrics } = trainC45Tree(nextTrain);
       const evaluation = evaluateC45Model(tree, nextTest);
-      void saveC45TrainingRunInSupabase({
-        splitRatio,
-        trainCount: nextTrain.length,
-        testCount: nextTest.length,
-        rootMetrics,
-        tree,
-        evaluation,
-        trainedById: currentUser.id,
-      });
+      void runSupabaseAction(
+        saveC45TrainingRunInSupabase({
+          splitRatio,
+          trainCount: nextTrain.length,
+          testCount: nextTest.length,
+          rootMetrics,
+          tree,
+          evaluation,
+          trainedById: currentUser.id,
+        }),
+        'Gagal menyimpan hasil training C4.5'
+      );
     }
   };
 
@@ -681,10 +792,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     path: string[];
   }) => {
     if (!isSupabaseMode || !currentUser || currentUser.role !== 'admin') return;
-    void saveC45PredictionInSupabase({
-      ...params,
-      predictedById: currentUser.id,
-    });
+    void runSupabaseAction(
+      saveC45PredictionInSupabase({
+        ...params,
+        predictedById: currentUser.id,
+      }),
+      'Gagal menyimpan prediksi C4.5'
+    );
   };
 
   const addReportHistory = (report: Omit<ReportHistoryItem, 'id'>) => {
@@ -705,16 +819,61 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     };
     setReports((prev) => [newRep, ...prev]);
     if (isSupabaseMode) {
-      void insertReportInSupabase(newRep, currentUser.id);
+      void runSupabaseAction(
+        insertReportInSupabase(newRep, currentUser.id),
+        'Gagal menyimpan laporan'
+      );
     }
   };
 
   const dashboardStats = useMemo(() => {
+    if (isSupabaseMode) {
+      const visibleTransactions = transactions.filter((t) => {
+        if (dashboardPaymentFilter !== 'Semua' && t.paymentMethod !== dashboardPaymentFilter) {
+          return false;
+        }
+        return currentUser?.role !== 'kasir' || t.cashierId === currentUser.id;
+      });
+      const selectedTransactions = visibleTransactions.filter(
+        (transaction) => transaction.date === selectedDashboardDate
+      );
+      const qrisTotal = selectedTransactions
+        .filter((transaction) => transaction.paymentMethod === 'QRIS')
+        .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
+      const tunaiTotal = selectedTransactions
+        .filter((transaction) => transaction.paymentMethod === 'Tunai')
+        .reduce((sum, transaction) => sum + transaction.totalAmount, 0);
+      const dailyTotals = new Map<string, { actual: number; qris: number; tunai: number }>();
+      for (const transaction of visibleTransactions) {
+        const total = dailyTotals.get(transaction.date) ?? { actual: 0, qris: 0, tunai: 0 };
+        total.actual += transaction.totalAmount;
+        if (transaction.paymentMethod === 'QRIS') total.qris += transaction.totalAmount;
+        if (transaction.paymentMethod === 'Tunai') total.tunai += transaction.totalAmount;
+        dailyTotals.set(transaction.date, total);
+      }
+
+      return {
+        totalSales: qrisTotal + tunaiTotal,
+        totalTransactions: selectedTransactions.length,
+        qrisTotal,
+        tunaiTotal,
+        sesuaiCount: selectedTransactions.filter((transaction) => transaction.status === 'Selesai').length,
+        perluDicekCount: selectedTransactions.filter((transaction) => transaction.status === 'Perlu Dicek').length,
+        tidakSesuaiCount: selectedTransactions.filter((transaction) => transaction.status === 'Tidak Sesuai').length,
+        dailyChartData: Array.from(dailyTotals.entries())
+          .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+          .slice(-7)
+          .map(([date, totals]) => ({
+            date,
+            label: formatShortDateID(date),
+            ...totals,
+            comparison: null,
+          })),
+      };
+    }
+
     const todayTx = transactions.filter((t) => {
       if (!isSupabaseMode && t.date !== selectedDashboardDate) return false;
-      if (isSupabaseMode && selectedDashboardDate !== '2026-09-23' && t.date !== selectedDashboardDate) {
-        return false;
-      }
       if (dashboardPaymentFilter !== 'Semua' && t.paymentMethod !== dashboardPaymentFilter) {
         return false;
       }
@@ -837,14 +996,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (isSupabaseMode) {
       if (currentUser) {
         void fetchOperationalStateFromSupabase(currentUser).then((remote) => {
-          if (!remote) return;
-          setUsers(remote.users);
-          if (remote.products.length > 0) setProducts(remote.products);
-          setTransactions(remote.transactions);
-          setQrisMutations(remote.qrisMutations);
-          setReconciliations(remote.reconciliations);
-          if (remote.sawCriteria.length > 0) setSawCriteria(remote.sawCriteria);
-          setReports(remote.reports);
+          applyRemoteState(remote);
+          setSupabaseError(null);
+        }).catch((err: unknown) => {
+          setSupabaseError(
+            err instanceof Error ? err.message : 'Gagal memuat ulang data dari Supabase.'
+          );
         });
       }
       return;
@@ -907,7 +1064,22 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         resetAppData,
       }}
     >
-      {children}
+    {supabaseError && (
+      <div
+        role="alert"
+        className="fixed right-4 top-4 z-[100] flex max-w-xl items-start gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 shadow-lg"
+      >
+        <span>{supabaseError}</span>
+        <button
+          type="button"
+          onClick={() => setSupabaseError(null)}
+          className="shrink-0 font-semibold underline"
+        >
+          Tutup
+        </button>
+      </div>
+    )}
+    {children}
     </AppContext.Provider>
   );
 }

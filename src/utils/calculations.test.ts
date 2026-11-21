@@ -4,9 +4,11 @@ import { calculateSaw, validateSawWeights } from './saw';
 import { computeEntropy, evaluateC45Model, predictC45, trainC45Tree } from './c45';
 import { formatCompactRupiah, formatRupiah } from './formatters';
 import {
+  C45_DATASET,
   INITIAL_PRODUCTS,
   INITIAL_RECONCILIATIONS,
   INITIAL_SAW_ALTERNATIVES,
+  INITIAL_SAW_CRITERIA,
   INITIAL_TRANSACTIONS,
   INITIAL_USERS,
 } from '../data/seedData';
@@ -156,6 +158,7 @@ import {
   mapTransactionItemsToRows,
   mapTransactionToRow,
   mapUserToRow,
+  normalizeSupabaseAssetUrl,
 } from '../services/supabaseRepository';
 import {
   SUPABASE_DEMO_USERS_SQL,
@@ -164,7 +167,11 @@ import {
   SUPABASE_SEED_SQL,
   SUPABASE_SQL_BLUEPRINT,
 } from '../services/supabaseBlueprint';
-import { isSupabaseConfigured, normalizeSupabaseUrl } from '../services/supabaseClient';
+import {
+  isServiceRoleKey,
+  isSupabaseConfigured,
+  normalizeSupabaseUrl,
+} from '../services/supabaseClient';
 
 test('Supabase repository mappers round-trip products, transactions (including deleted product snapshots), reconciliations, reports, SAW criteria, and profiles cleanly', () => {
   const sampleUser = INITIAL_USERS[1];
@@ -232,8 +239,21 @@ test('Supabase SQL blueprint includes all 14 tables, strict RLS without permissi
     assert.ok(SUPABASE_SCHEMA_SQL.includes(table), `Missing table ${table}`);
     assert.ok(SUPABASE_RLS_SQL.includes(table), `Missing RLS for ${table}`);
   }
+  const enabledTables = [...SUPABASE_RLS_SQL.matchAll(/alter table public\.(\w+) enable row level security;/gi)]
+    .map((match) => match[1]);
+  assert.equal(new Set(enabledTables).size, 14);
+  const createdPolicies = [...SUPABASE_RLS_SQL.matchAll(/create policy "([^"]+)"\s+on public\.(\w+)/gi)];
+  for (const [, policyName, tableName] of createdPolicies) {
+    assert.ok(
+      new RegExp(`drop policy if exists "${policyName}" on public\\.${tableName};`, 'i').test(
+        SUPABASE_RLS_SQL
+      ),
+      `Missing matching DROP for ${tableName}.${policyName}`
+    );
+  }
 
   assert.ok(SUPABASE_SCHEMA_SQL.includes('prevent_profile_privilege_escalation'));
+  assert.ok(SUPABASE_SCHEMA_SQL.includes('public.current_user_role()'));
   assert.ok(SUPABASE_SCHEMA_SQL.includes('public.is_admin()'));
   assert.ok(SUPABASE_RLS_SQL.includes('auth.uid()'));
   assert.equal(/for\s+(all|insert|update|delete)\s+to\s+anon/i.test(SUPABASE_RLS_SQL), false);
@@ -244,11 +264,73 @@ test('Supabase SQL blueprint includes all 14 tables, strict RLS without permissi
   );
   assert.equal(/with\s+check\s*\(\s*true\s*\)/i.test(SUPABASE_RLS_SQL), false);
   assert.equal(SUPABASE_SQL_BLUEPRINT.includes('service_role'), false);
+  for (const policy of [
+    'reports_insert_by_role',
+    'reports_update_admin_only',
+    'reports_delete_admin_only',
+  ]) {
+    assert.ok(
+      new RegExp(`drop policy if exists "${policy}" on public\\.reports;`, 'i').test(
+        SUPABASE_RLS_SQL
+      ),
+      `Missing DROP for ${policy}`
+    );
+    assert.ok(
+      new RegExp(`create policy "${policy}"\\s+on public\\.reports`, 'i').test(
+        SUPABASE_RLS_SQL
+      ),
+      `Missing CREATE for ${policy}`
+    );
+  }
 
   for (let i = 1; i <= 25; i++) {
     const id = `prd-${String(i).padStart(2, '0')}`;
     assert.ok(SUPABASE_SEED_SQL.includes(`'${id}'`), `Missing seed product ${id}`);
   }
+  const seededProducts = [
+    ...SUPABASE_SEED_SQL.matchAll(
+      /\('(prd-\d+)', '([^']+)', '([^']+)', (\d+(?:\.\d+)?),/g
+    ),
+  ].map(([, id, name, category, price]) => ({
+    id,
+    name,
+    category,
+    price: Number(price),
+  }));
+  assert.deepEqual(
+    seededProducts,
+    INITIAL_PRODUCTS.map(({ id, name, category, price }) => ({ id, name, category, price }))
+  );
+  const sawWeights = [...SUPABASE_SEED_SQL.matchAll(/\('c[1-5]', 'C[1-5]', '[^']+', (\d+),/g)]
+    .map((match) => Number(match[1]));
+  assert.deepEqual(sawWeights, [30, 20, 20, 20, 10]);
+  assert.deepEqual(sawWeights, INITIAL_SAW_CRITERIA.map((criterion) => criterion.weight));
+  const seededC45Records = [
+    ...SUPABASE_SEED_SQL.matchAll(
+      /\('((?:SIM|TST)-\d{2})', '(train|test)', '([^']+)', '([^']+)', '([^']+)', '([^']+)', '([^']+)'\)/g
+    ),
+  ].map(([, id, splitGroup, selisihNominal, verifikasiQris, kelengkapanBukti, ketepatanWaktu, label]) => ({
+    id,
+    splitGroup,
+    selisihNominal,
+    verifikasiQris,
+    kelengkapanBukti,
+    ketepatanWaktu,
+    label,
+  }));
+  assert.equal(new Set(seededC45Records.map((record) => record.id)).size, 40);
+  assert.equal(seededC45Records.filter((record) => record.splitGroup === 'train').length, 28);
+  assert.equal(seededC45Records.filter((record) => record.splitGroup === 'test').length, 12);
+  assert.deepEqual(
+    seededC45Records,
+    C45_DATASET.map((record) => ({
+      ...record,
+      splitGroup: record.id.startsWith('SIM-') ? 'train' : 'test',
+    }))
+  );
+  assert.match(SUPABASE_SEED_SQL, /on conflict \(id\) do update set/);
+  assert.match(SUPABASE_SEED_SQL, /on conflict \(id\) do nothing/);
+  assert.doesNotMatch(SUPABASE_SEED_SQL, /insert into public\.transactions/i);
   assert.ok(SUPABASE_SEED_SQL.includes("('prd-19', 'Dimsum Mie Saus Mentai isi 2', 'Cemilan', 38000"));
   assert.ok(SUPABASE_SEED_SQL.includes("('prd-20', 'Dimsum Goreng Mentai (3 pcs)', 'Dimsum Goreng', 48000"));
 
@@ -257,11 +339,20 @@ test('Supabase SQL blueprint includes all 14 tables, strict RLS without permissi
   assert.ok(SUPABASE_DEMO_USERS_SQL.includes('gracia@dimsumme.local'));
   assert.ok(SUPABASE_DEMO_USERS_SQL.includes('ferginia@dimsumme.local'));
   assert.ok(SUPABASE_DEMO_USERS_SQL.includes('julio@dimsumme.local'));
+  assert.equal((SUPABASE_DEMO_USERS_SQL.match(/on conflict \(id\) do update set/gi) ?? []).length, 4);
   assert.equal(
     normalizeSupabaseUrl('https://pypdqxcnnhwearhjlsmk.supabase.co/rest/v1/'),
     'https://pypdqxcnnhwearhjlsmk.supabase.co'
   );
   assert.equal(isSupabaseConfigured(), false);
+  assert.equal(isServiceRoleKey('sb_secret_example'), true);
+  const serviceRoleJwt = `header.${Buffer.from(JSON.stringify({ role: 'service_role' })).toString('base64url')}.signature`;
+  assert.equal(isServiceRoleKey(serviceRoleJwt), true);
+  assert.equal(isServiceRoleKey('sb_publishable_example'), false);
+  assert.equal(
+    normalizeSupabaseAssetUrl('/src/assets/images/menu.jpg', '/dimsum-me/'),
+    '/dimsum-me/src/assets/images/menu.jpg'
+  );
 });
 
 

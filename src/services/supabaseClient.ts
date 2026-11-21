@@ -1,6 +1,13 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { isSupabaseServiceRoleKey } from './supabaseKeySafety';
+
+export { isSupabaseServiceRoleKey as isServiceRoleKey } from './supabaseKeySafety';
 
 let cachedClient: SupabaseClient | null = null;
+
+function isDemoBuild(): boolean {
+  return readEnvVar('VITE_DEMO_MODE').toLowerCase() === 'true';
+}
 
 function readEnvVar(key: string): string {
   try {
@@ -25,15 +32,37 @@ export function normalizeSupabaseUrl(rawUrl: string): string {
   }
 }
 
-export function isSupabaseConfigured(): boolean {
-  const url = normalizeSupabaseUrl(readEnvVar('VITE_SUPABASE_URL'));
+export function getSupabaseConfigError(): string | null {
+  if (isDemoBuild()) return null;
+  const rawUrl = readEnvVar('VITE_SUPABASE_URL');
   const anonKey = readEnvVar('VITE_SUPABASE_ANON_KEY');
-  if (!url || !anonKey) return false;
-  if (url.includes('YOUR_PROJECT_REF') || anonKey.includes('YOUR_SUPABASE_')) return false;
-  return url.startsWith('https://') && url.includes('supabase.');
+  if (!rawUrl && !anonKey) return null;
+  if (!rawUrl || !anonKey) {
+    return 'Supabase memerlukan VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY.';
+  }
+  if (/YOUR_/i.test(rawUrl) || /YOUR_/i.test(anonKey)) {
+    return 'Konfigurasi Supabase masih menggunakan nilai placeholder.';
+  }
+  if (isSupabaseServiceRoleKey(anonKey)) {
+    return 'service_role/secret key tidak boleh digunakan di aplikasi frontend. Gunakan anon/publishable key.';
+  }
+  const normalizedUrl = normalizeSupabaseUrl(rawUrl);
+  if (!normalizedUrl.startsWith('https://') || !normalizedUrl.includes('supabase.')) {
+    return 'VITE_SUPABASE_URL harus berupa URL HTTPS proyek Supabase yang valid.';
+  }
+  return null;
+}
+
+export function isSupabaseConfigured(): boolean {
+  if (isDemoBuild()) return false;
+  return Boolean(
+    readEnvVar('VITE_SUPABASE_URL') || readEnvVar('VITE_SUPABASE_ANON_KEY')
+  );
 }
 
 export function getSupabaseClient(): SupabaseClient | null {
+  const configError = getSupabaseConfigError();
+  if (configError) throw new Error(configError);
   if (!isSupabaseConfigured()) return null;
   if (!cachedClient) {
     const url = normalizeSupabaseUrl(readEnvVar('VITE_SUPABASE_URL'));
