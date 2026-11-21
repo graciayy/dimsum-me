@@ -1,0 +1,6 @@
+{
+  "name": "Dimsum Me — Sistem Penjualan & Evaluasi Kas",
+  "description": "Sistem Informasi Penjualan dan Evaluasi Ketepatan Pencatatan Penerimaan Kas pada UMKM Dimsum Me Menggunakan Metode SAW dan Algoritma C4.5.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
